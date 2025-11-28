@@ -1,0 +1,22 @@
+{
+  "model": "Conformer (Wav2Vec2-Large)",
+  "model_name": "facebook/wav2vec2-large-960h",
+  "dataset": "LibriSpeech train-clean-100",
+  "num_samples_evaluated": 28539,
+  "num_samples_full_dataset": 28539,
+  "wer_percent": 1.1800816280359276,
+  "avg_inference_time_sec": 0.0016290808246116758,
+  "total_time_hours": 1.4402232947042495,
+  "num_parameters": 315461792,
+  "num_layers": 24,
+  "d_model": 1024,
+  "num_heads": 16,
+  "batch_size": 16,
+  "evaluation_note": "Full dataset evaluation",
+  "kv_cache_mb": {
+    "mha": 187.5,
+    "mla": 93.75,
+    "gqa": 23.4375,
+    "linear": 192.0
+  }
+}

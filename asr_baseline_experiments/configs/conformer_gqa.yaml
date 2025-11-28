@@ -1,0 +1,23 @@
+# Conformer with Grouped Query Attention (GQA)
+
+model_type: conformer
+attention_type: gqa
+
+# Model architecture
+input_dim: 80
+d_model: 512
+num_heads: 8
+num_layers: 12
+conv_kernel_size: 31
+ff_expansion_factor: 4
+dropout: 0.1
+
+# Training
+batch_size: 16
+num_epochs: 50
+learning_rate: 0.0001
+weight_decay: 0.000001
+
+# GQA-specific: number of key-value heads (fewer than query heads)
+attention_kwargs:
+  num_kv_heads: 2

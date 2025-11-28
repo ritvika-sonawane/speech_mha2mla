@@ -1,0 +1,23 @@
+{
+  "model": "Branchformer-Large",
+  "model_name": "speechbrain/asr-branchformer-large-tedlium2",
+  "dataset": "LibriSpeech train-clean-100",
+  "num_samples_evaluated": 1000,
+  "num_samples_full_dataset": 28539,
+  "wer_percent": "Not available",
+  "avg_inference_time_sec": 4.719011833190918,
+  "total_time_hours": 20.481822192668915,
+  "total_time_hours_extrapolated": 37.409966307621005,
+  "num_parameters": 120000000,
+  "num_layers": 18,
+  "d_model": 512,
+  "num_heads": 8,
+  "batch_size": 8,
+  "evaluation_note": "Evaluated on 1000 samples, timing extrapolated to 28539",
+  "kv_cache_mb": {
+    "mha": 70.3125,
+    "mla": 35.15625,
+    "gqa": 17.578125,
+    "linear": 36.0
+  }
+}

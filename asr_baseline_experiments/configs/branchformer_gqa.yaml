@@ -1,0 +1,24 @@
+# Branchformer with Grouped Query Attention (GQA)
+
+model_type: branchformer
+attention_type: gqa
+
+# Model architecture
+input_dim: 80
+d_model: 512
+num_heads: 8
+num_layers: 12
+mlp_expansion_factor: 4
+conv_kernel_size: 31
+dropout: 0.1
+merge_method: concat
+
+# Training
+batch_size: 16
+num_epochs: 50
+learning_rate: 0.0001
+weight_decay: 0.000001
+
+# GQA-specific
+attention_kwargs:
+  num_kv_heads: 2
