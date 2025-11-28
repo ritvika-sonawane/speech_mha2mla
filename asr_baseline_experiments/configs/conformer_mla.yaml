@@ -1,13 +1,14 @@
 # Conformer with Multi-Head Latent Attention (MLA)
+# Configuration matching baseline with MLA compression
 
 model_type: conformer
 attention_type: mla
 
-# Model architecture
+# Model architecture (matching MHA baseline)
 input_dim: 80
-d_model: 512
-num_heads: 8
-num_layers: 12
+d_model: 1024
+num_heads: 16
+num_layers: 24
 conv_kernel_size: 31
 ff_expansion_factor: 4
 dropout: 0.1
@@ -19,5 +20,6 @@ learning_rate: 0.0001
 weight_decay: 0.000001
 
 # MLA-specific: compressed latent dimension
+# latent_dim=1024 gives 50% KV cache reduction
 attention_kwargs:
-  latent_dim: 256
+  latent_dim: 1024

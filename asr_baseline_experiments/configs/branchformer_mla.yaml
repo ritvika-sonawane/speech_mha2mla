@@ -1,13 +1,14 @@
 # Branchformer with Multi-Head Latent Attention (MLA)
+# Configuration matching baseline with MLA compression
 
 model_type: branchformer
 attention_type: mla
 
-# Model architecture
+# Model architecture (matching MHA baseline)
 input_dim: 80
 d_model: 512
 num_heads: 8
-num_layers: 12
+num_layers: 18
 mlp_expansion_factor: 4
 conv_kernel_size: 31
 dropout: 0.1
@@ -19,6 +20,7 @@ num_epochs: 50
 learning_rate: 0.0001
 weight_decay: 0.000001
 
-# MLA-specific
+# MLA-specific: compressed latent dimension
+# latent_dim=512 gives 50% KV cache reduction
 attention_kwargs:
-  latent_dim: 256
+  latent_dim: 512

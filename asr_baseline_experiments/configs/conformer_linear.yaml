@@ -3,11 +3,11 @@
 model_type: conformer
 attention_type: linear
 
-# Model architecture
+# Model architecture (matching MHA baseline)
 input_dim: 80
-d_model: 512
-num_heads: 8
-num_layers: 12
+d_model: 1024
+num_heads: 16
+num_layers: 24
 conv_kernel_size: 31
 ff_expansion_factor: 4
 dropout: 0.1
