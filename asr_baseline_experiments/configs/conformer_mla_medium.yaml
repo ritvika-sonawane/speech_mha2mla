@@ -1,0 +1,25 @@
+# Conformer with Multi-Latent Attention (MLA) - Medium size for T4 GPU
+# Balanced between model capacity and memory constraints
+
+model_type: conformer
+attention_type: mla_simple
+
+# Model architecture - medium size
+input_dim: 80
+d_model: 512          # Half of large config
+num_heads: 8          # Half of large config
+num_layers: 12        # Half of large config
+conv_kernel_size: 31
+ff_expansion_factor: 4
+dropout: 0.1
+
+# Training
+batch_size: 4         # Adjusted for T4 memory limits
+num_epochs: 50
+learning_rate: 0.0001
+weight_decay: 0.000001
+
+# MLA-specific configuration
+attention_kwargs:
+  latent_dim: 256     # 50% compression of d_model
+

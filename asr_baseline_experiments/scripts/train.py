@@ -26,14 +26,21 @@ from models.branchformer import build_branchformer
 class LibriSpeechDataset(torch.utils.data.Dataset):
     """LibriSpeech dataset wrapper"""
     
-    def __init__(self, split='train', data_dir='data/librispeech'):
+    def __init__(self, split='train', data_dir='data/librispeech', quick_test=False):
         self.data_dir = data_dir
         
         # Load using HuggingFace datasets
         if split == 'train':
-            self.dataset = load_dataset("librispeech_asr", "clean", split="train.100")
+            if quick_test:
+                # Use only 1% of data for quick testing on CPU
+                self.dataset = load_dataset("librispeech_asr", "clean", split="train.100[:1%]")
+            else:
+                self.dataset = load_dataset("librispeech_asr", "clean", split="train.100")
         elif split == 'test-clean':
-            self.dataset = load_dataset("librispeech_asr", "clean", split="test")
+            if quick_test:
+                self.dataset = load_dataset("librispeech_asr", "clean", split="test[:1%]")
+            else:
+                self.dataset = load_dataset("librispeech_asr", "clean", split="test")
         elif split == 'test-other':
             self.dataset = load_dataset("librispeech_asr", "other", split="test")
         
@@ -106,7 +113,7 @@ def extract_features(audio, n_mels=80):
         n_mels=n_mels,
         n_fft=400,
         hop_length=160
-    )
+    ).to(audio.device)  # Move transform to same device as audio
     
     features = mel_spec(audio)
     features = torch.log(features + 1e-9)
@@ -122,21 +129,24 @@ def train_epoch(model, dataloader, criterion, optimizer, device, epoch):
     for batch_idx, (audios, texts, audio_lens, text_lens) in enumerate(pbar):
         audios = audios.to(device)
         texts = texts.to(device)
-        audio_lens = audio_lens.to(device)
         
         # Extract features
         features = extract_features(audios)
         
+        # Calculate feature lengths after mel-spectrogram extraction
+        # hop_length=160 means audio_len / 160 frames
+        feature_lens = (audio_lens // 160).to(device)
+        
         # Forward pass
         optimizer.zero_grad()
-        logits, _ = model(features, audio_lens)
+        logits, _ = model(features, feature_lens)
         
         # Compute loss (CTC Loss)
         log_probs = torch.nn.functional.log_softmax(logits, dim=-1)
         log_probs = log_probs.transpose(0, 1)  # [T, B, vocab_size]
         
-        input_lengths = audio_lens // 4  # Account for subsampling
-        target_lengths = text_lens
+        input_lengths = feature_lens // 4  # Account for model subsampling
+        target_lengths = text_lens.to(device)
         
         loss = criterion(log_probs, texts, input_lengths, target_lengths)
         
@@ -160,20 +170,22 @@ def evaluate(model, dataloader, criterion, device):
         for audios, texts, audio_lens, text_lens in tqdm(dataloader, desc="Evaluating"):
             audios = audios.to(device)
             texts = texts.to(device)
-            audio_lens = audio_lens.to(device)
             
             # Extract features
             features = extract_features(audios)
             
+            # Calculate feature lengths after mel-spectrogram extraction
+            feature_lens = (audio_lens // 160).to(device)
+            
             # Forward pass
-            logits, _ = model(features, audio_lens)
+            logits, _ = model(features, feature_lens)
             
             # Compute loss
             log_probs = torch.nn.functional.log_softmax(logits, dim=-1)
             log_probs = log_probs.transpose(0, 1)
             
-            input_lengths = audio_lens // 4
-            target_lengths = text_lens
+            input_lengths = feature_lens // 4
+            target_lengths = text_lens.to(device)
             
             loss = criterion(log_probs, texts, input_lengths, target_lengths)
             total_loss += loss.item()
@@ -200,8 +212,11 @@ def main(args):
     
     # Create datasets
     print("Loading datasets...")
-    train_dataset = LibriSpeechDataset('train')
-    test_dataset = LibriSpeechDataset('test-clean')
+    quick_test = args.quick_test if hasattr(args, 'quick_test') else False
+    if quick_test:
+        print("⚠️  QUICK TEST MODE: Using only 1% of data")
+    train_dataset = LibriSpeechDataset('train', quick_test=quick_test)
+    test_dataset = LibriSpeechDataset('test-clean', quick_test=quick_test)
     
     vocab_size = len(train_dataset.vocab)
     config['vocab_size'] = vocab_size
@@ -300,6 +315,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Train ASR model')
     parser.add_argument('--config', type=str, required=True, help='Path to config file')
     parser.add_argument('--output_dir', type=str, required=True, help='Output directory')
+    parser.add_argument('--quick_test', action='store_true', help='Use 1%% of data for quick CPU testing')
     
     args = parser.parse_args()
     main(args)

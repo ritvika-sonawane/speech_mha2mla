@@ -23,8 +23,10 @@ mkdir -p logs
 mkdir -p results
 
 # Define model and attention combinations
-MODELS=("conformer" "branchformer")
-ATTENTIONS=("mha" "mla" "gqa" "linear")
+# MODELS=("conformer" "branchformer")
+MODELS=("conformer")
+# ATTENTIONS=("mha" "mla" "gqa" "linear")
+ATTENTIONS=("mha" "mla")
 
 # Track timing
 START_TIME=$(date +%s)

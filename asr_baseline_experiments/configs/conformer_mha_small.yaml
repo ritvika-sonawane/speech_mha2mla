@@ -1,0 +1,24 @@
+# Conformer with Multi-Head Attention (MHA) - Small CPU-friendly version
+# Reduced size for training on CPU with limited memory
+
+model_type: conformer
+attention_type: mha
+
+# Model architecture - significantly reduced for CPU training
+input_dim: 80
+d_model: 256          # Reduced from 1024
+num_heads: 8          # Reduced from 16
+num_layers: 6         # Reduced from 24
+conv_kernel_size: 31
+ff_expansion_factor: 4
+dropout: 0.1
+
+# Training - adjusted for limited memory
+batch_size: 4         # Reduced from 16
+num_epochs: 50
+learning_rate: 0.0001
+weight_decay: 0.000001
+
+# Attention-specific (none for MHA)
+attention_kwargs: null
+

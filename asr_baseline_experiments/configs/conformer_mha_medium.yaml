@@ -1,0 +1,24 @@
+# Conformer with Multi-Head Attention (MHA) - Medium size for T4 GPU
+# Balanced between model capacity and memory constraints
+
+model_type: conformer
+attention_type: mha
+
+# Model architecture - medium size
+input_dim: 80
+d_model: 512          # Half of large config
+num_heads: 8          # Half of large config  
+num_layers: 12        # Half of large config
+conv_kernel_size: 31
+ff_expansion_factor: 4
+dropout: 0.1
+
+# Training
+batch_size: 4         # Adjusted for T4 memory limits
+num_epochs: 50
+learning_rate: 0.0001
+weight_decay: 0.000001
+
+# Attention-specific (none for MHA)
+attention_kwargs: null
+

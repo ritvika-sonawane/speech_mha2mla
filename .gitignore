@@ -1,2 +1,5 @@
 /Reports
+asr_baseline_experiments/data/
+asr_baseline_experiments/MHA2MLA/
+asr_baseline_experiments/results/
 asr_baseline_experiments.tar.gz

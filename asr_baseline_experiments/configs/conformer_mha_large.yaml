@@ -1,0 +1,24 @@
+# Conformer with Multi-Head Attention (MHA) - Large model for GPU
+# Adjusted batch size to fit in 16GB GPU memory
+
+model_type: conformer
+attention_type: mha
+
+# Model architecture
+input_dim: 80
+d_model: 1024
+num_heads: 16
+num_layers: 24
+conv_kernel_size: 31
+ff_expansion_factor: 4
+dropout: 0.1
+
+# Training - reduced batch size to fit in GPU memory
+batch_size: 4         # Reduced from 16 to fit in T4 memory
+num_epochs: 50
+learning_rate: 0.0001
+weight_decay: 0.000001
+
+# Attention-specific (none for MHA)
+attention_kwargs: null
+
