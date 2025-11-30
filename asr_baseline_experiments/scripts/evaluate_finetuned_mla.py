@@ -20,12 +20,111 @@ import torch
 import torch.nn as nn
 import json
 from pathlib import Path
-from datasets import load_dataset
+from datasets import load_dataset, Dataset
 from transformers import Wav2Vec2ConformerForCTC, Wav2Vec2Processor
 from tqdm import tqdm
 import evaluate
 import time
 import numpy as np
+import soundfile as sf
+
+
+def load_librispeech_offline(data_dir, split='test-clean'):
+    """
+    Load LibriSpeech data from offline directory
+    
+    Args:
+        data_dir: Path to the base LibriSpeech directory (e.g., 'data/librispeech/LibriSpeech')
+        split: One of 'test-clean', 'test-other', 'dev-clean', 'dev-other'
+    
+    Returns:
+        HuggingFace Dataset object with audio and text
+    """
+    data_path = Path(data_dir) / split
+    
+    if not data_path.exists():
+        raise FileNotFoundError(f"Data directory not found: {data_path}")
+    
+    print(f"  Loading offline data from: {data_path}")
+    
+    # Collect all samples
+    samples = []
+    
+    # Iterate through speaker directories
+    for speaker_dir in sorted(data_path.iterdir()):
+        if not speaker_dir.is_dir():
+            continue
+        
+        # Iterate through chapter directories
+        for chapter_dir in sorted(speaker_dir.iterdir()):
+            if not chapter_dir.is_dir():
+                continue
+            
+            # Find transcript file
+            trans_file = chapter_dir / f"{speaker_dir.name}-{chapter_dir.name}.trans.txt"
+            
+            if not trans_file.exists():
+                continue
+            
+            # Read transcripts
+            with open(trans_file, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    
+                    parts = line.split(' ', 1)
+                    if len(parts) != 2:
+                        continue
+                    
+                    audio_id, text = parts
+                    audio_file = chapter_dir / f"{audio_id}.flac"
+                    
+                    if not audio_file.exists():
+                        continue
+                    
+                    samples.append({
+                        'audio_id': audio_id,
+                        'audio_path': str(audio_file),
+                        'text': text
+                    })
+    
+    print(f"  Found {len(samples)} samples")
+    
+    # Load audio data
+    audio_data = []
+    texts = []
+    
+    print("  Loading audio files...")
+    for sample in tqdm(samples, desc="  Loading audio"):
+        try:
+            audio_array, sample_rate = sf.read(sample['audio_path'])
+            
+            # Ensure mono and correct sample rate
+            if len(audio_array.shape) > 1:
+                audio_array = audio_array.mean(axis=1)
+            
+            # Convert to float32 if needed
+            if audio_array.dtype != np.float32:
+                audio_array = audio_array.astype(np.float32)
+            
+            audio_data.append({
+                'array': audio_array,
+                'sampling_rate': sample_rate,
+                'path': sample['audio_path']
+            })
+            texts.append(sample['text'])
+        except Exception as e:
+            print(f"  Error loading {sample['audio_path']}: {e}")
+            continue
+    
+    # Create HuggingFace dataset
+    dataset = Dataset.from_dict({
+        'audio': audio_data,
+        'text': texts
+    })
+    
+    return dataset
 
 
 class MLAAttention(nn.Module):
@@ -248,6 +347,11 @@ def main():
     parser.add_argument('--batch_size', type=int, default=8)
     parser.add_argument('--max_samples', type=int, default=None)
     parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu')
+    parser.add_argument('--offline_data_dir', type=str, 
+                        default='/home/ubuntu/speech_mha2mla/asr_baseline_experiments/data/librispeech/LibriSpeech',
+                        help='Path to offline LibriSpeech data directory')
+    parser.add_argument('--use_hf_dataset', action='store_true',
+                        help='Use HuggingFace dataset instead of offline data')
     
     args = parser.parse_args()
     
@@ -267,15 +371,23 @@ def main():
     
     # Load dataset
     print("\nLoading dataset...")
-    dataset_split = {
-        'test-clean': 'test',
-        'test-other': 'test.other',
-        'dev-clean': 'validation',
-        'dev-other': 'validation.other',
-    }[args.dataset]
     
-    dataset_name = 'clean' if 'clean' in args.dataset else 'other'
-    dataset = load_dataset("librispeech_asr", dataset_name, split=dataset_split)
+    if args.use_hf_dataset:
+        # Use HuggingFace dataset
+        print("  Using HuggingFace dataset loader...")
+        dataset_split = {
+            'test-clean': 'test',
+            'test-other': 'test.other',
+            'dev-clean': 'validation',
+            'dev-other': 'validation.other',
+        }[args.dataset]
+        
+        dataset_name = 'clean' if 'clean' in args.dataset else 'other'
+        dataset = load_dataset("librispeech_asr", dataset_name, split=dataset_split)
+    else:
+        # Use offline dataset
+        print("  Using offline LibriSpeech data...")
+        dataset = load_librispeech_offline(args.offline_data_dir, args.dataset)
     
     if args.max_samples:
         dataset = dataset.select(range(min(args.max_samples, len(dataset))))

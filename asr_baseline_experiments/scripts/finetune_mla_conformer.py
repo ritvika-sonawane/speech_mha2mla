@@ -20,7 +20,7 @@ import argparse
 import torch
 import torch.nn as nn
 from pathlib import Path
-from datasets import load_dataset
+from datasets import load_dataset, Dataset
 from transformers import (
     Wav2Vec2ConformerForCTC,
     Wav2Vec2Processor,
@@ -31,6 +31,9 @@ from transformers import (
 from dataclasses import dataclass
 from typing import Dict, List, Union
 import json
+import soundfile as sf
+import numpy as np
+from tqdm import tqdm
 
 
 class MLAAttention(nn.Module):
@@ -217,13 +220,13 @@ class DataCollatorCTCWithPadding:
             return_tensors="pt",
         )
         
-        with self.processor.as_target_processor():
-            labels_batch = self.processor.pad(
-                label_features,
-                padding=self.padding,
-                max_length=self.max_length,
-                return_tensors="pt",
-            )
+        # Use tokenizer directly instead of deprecated as_target_processor()
+        labels_batch = self.processor.tokenizer.pad(
+            label_features,
+            padding=self.padding,
+            max_length=self.max_length,
+            return_tensors="pt",
+        )
         
         # Replace padding with -100 for loss calculation
         labels = labels_batch["input_ids"].masked_fill(labels_batch.attention_mask.ne(1), -100)
@@ -233,6 +236,115 @@ class DataCollatorCTCWithPadding:
         return batch
 
 
+def load_librispeech_offline(data_dir, split='train-clean-100', max_samples=None):
+    """
+    Load LibriSpeech data from offline directory
+    
+    Args:
+        data_dir: Path to the base LibriSpeech directory (e.g., 'data/librispeech/LibriSpeech')
+        split: One of 'train-clean-100', 'dev-clean', 'dev-other', 'test-clean', 'test-other'
+        max_samples: Maximum number of samples to load (optional)
+    
+    Returns:
+        HuggingFace Dataset object with audio and text
+    """
+    data_path = Path(data_dir) / split
+    
+    if not data_path.exists():
+        raise FileNotFoundError(f"Data directory not found: {data_path}")
+    
+    print(f"  Loading offline data from: {data_path}")
+    
+    # Collect all samples
+    samples = []
+    
+    # Iterate through speaker directories
+    for speaker_dir in sorted(data_path.iterdir()):
+        if not speaker_dir.is_dir():
+            continue
+        
+        # Iterate through chapter directories
+        for chapter_dir in sorted(speaker_dir.iterdir()):
+            if not chapter_dir.is_dir():
+                continue
+            
+            # Find transcript file
+            trans_file = chapter_dir / f"{speaker_dir.name}-{chapter_dir.name}.trans.txt"
+            
+            if not trans_file.exists():
+                continue
+            
+            # Read transcripts
+            with open(trans_file, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    
+                    parts = line.split(' ', 1)
+                    if len(parts) != 2:
+                        continue
+                    
+                    audio_id, text = parts
+                    audio_file = chapter_dir / f"{audio_id}.flac"
+                    
+                    if not audio_file.exists():
+                        continue
+                    
+                    samples.append({
+                        'audio_id': audio_id,
+                        'audio_path': str(audio_file),
+                        'text': text
+                    })
+                    
+                    # Stop early if we have enough samples
+                    if max_samples and len(samples) >= max_samples:
+                        break
+            
+            if max_samples and len(samples) >= max_samples:
+                break
+        
+        if max_samples and len(samples) >= max_samples:
+            break
+    
+    print(f"  Found {len(samples)} samples")
+    
+    # Load audio data
+    audio_data = []
+    texts = []
+    
+    print(f"  Loading audio files...")
+    for sample in tqdm(samples, desc="  Loading audio"):
+        try:
+            audio_array, sample_rate = sf.read(sample['audio_path'])
+            
+            # Ensure mono and correct sample rate
+            if len(audio_array.shape) > 1:
+                audio_array = audio_array.mean(axis=1)
+            
+            # Convert to float32 if needed
+            if audio_array.dtype != np.float32:
+                audio_array = audio_array.astype(np.float32)
+            
+            audio_data.append({
+                'array': audio_array,
+                'sampling_rate': sample_rate,
+                'path': sample['audio_path']
+            })
+            texts.append(sample['text'])
+        except Exception as e:
+            print(f"  Error loading {sample['audio_path']}: {e}")
+            continue
+    
+    # Create HuggingFace dataset
+    dataset = Dataset.from_dict({
+        'audio': audio_data,
+        'text': texts
+    })
+    
+    return dataset
+
+
 def prepare_dataset(batch, processor):
     """Prepare audio and text for training"""
     audio = batch["audio"]
@@ -240,9 +352,8 @@ def prepare_dataset(batch, processor):
     # Process audio
     batch["input_values"] = processor(audio["array"], sampling_rate=audio["sampling_rate"]).input_values[0]
     
-    # Process text
-    with processor.as_target_processor():
-        batch["labels"] = processor(batch["text"]).input_ids
+    # Process text using tokenizer directly instead of deprecated as_target_processor()
+    batch["labels"] = processor.tokenizer(batch["text"]).input_ids
     
     return batch
 
@@ -272,6 +383,11 @@ def main():
                         help='Evaluate every N steps')
     parser.add_argument('--max_train_samples', type=int, default=None,
                         help='Max training samples (for testing)')
+    parser.add_argument('--offline_data_dir', type=str, 
+                        default='/home/ubuntu/speech_mha2mla/asr_baseline_experiments/data/librispeech/LibriSpeech',
+                        help='Path to offline LibriSpeech data directory')
+    parser.add_argument('--use_hf_dataset', action='store_true',
+                        help='Use HuggingFace dataset instead of offline data')
     
     args = parser.parse_args()
     
@@ -311,12 +427,28 @@ def main():
     
     # Load datasets
     print("Loading LibriSpeech dataset...")
-    train_dataset = load_dataset("librispeech_asr", "clean", split="train.100")
-    eval_dataset = load_dataset("librispeech_asr", "clean", split="validation")
     
-    if args.max_train_samples:
-        train_dataset = train_dataset.select(range(args.max_train_samples))
-        print(f"  Using {args.max_train_samples} training samples for testing")
+    if args.use_hf_dataset:
+        # Use HuggingFace dataset
+        print("  Using HuggingFace dataset loader...")
+        train_dataset = load_dataset("librispeech_asr", "clean", split="train.100")
+        eval_dataset = load_dataset("librispeech_asr", "clean", split="validation")
+        
+        if args.max_train_samples:
+            train_dataset = train_dataset.select(range(args.max_train_samples))
+            print(f"  Using {args.max_train_samples} training samples for testing")
+    else:
+        # Use offline dataset
+        print("  Using offline LibriSpeech data...")
+        train_dataset = load_librispeech_offline(
+            args.offline_data_dir, 
+            'train-clean-100',
+            max_samples=args.max_train_samples
+        )
+        eval_dataset = load_librispeech_offline(
+            args.offline_data_dir, 
+            'dev-clean'
+        )
     
     print(f"  Train: {len(train_dataset)} samples")
     print(f"  Eval: {len(eval_dataset)} samples")

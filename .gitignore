@@ -1,4 +1,5 @@
 /Reports
+asr_baseline_experiments/checkpoints/
 asr_baseline_experiments/data/
 asr_baseline_experiments/MHA2MLA/
 asr_baseline_experiments/results/

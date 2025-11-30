@@ -210,7 +210,7 @@ if [ -f "$RESULTS_DIR/conformer_mla_finetuned/pytorch_model.bin" ]; then
         --output_file "$RESULTS_DIR/mla_finetuned_wer.json" \
         --dataset test-clean \
         ${MAX_EVAL_SAMPLES:+--max_samples $MAX_EVAL_SAMPLES} \
-        --batch_size 4
+        --batch_size 8
     
     echo -e "${GREEN}✓ Fine-tuned MLA evaluation completed successfully!${NC}"
     MLA_WER=$(python -c "import json; print(f\"{json.load(open('$RESULTS_DIR/mla_finetuned_wer.json'))['results']['wer']:.2f}%\")" 2>/dev/null || echo "N/A")

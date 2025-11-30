@@ -1,0 +1,55 @@
+# Requirements for ASR Baseline Experiments Pipeline
+# For running run_complete_pipeline.sh
+#
+# Installation:
+#   pip install -r requirements.txt
+#
+# GPU Requirements:
+#   - CUDA 12.1+ recommended
+#   - At least 16GB VRAM for full pipeline
+#   - T4, V100, A100, or similar GPU
+
+# Core Deep Learning
+torch>=2.0.0
+torchvision>=0.15.0
+torchaudio>=2.0.0
+
+# HuggingFace Libraries
+transformers>=4.30.0
+datasets>=2.14.0
+accelerate>=0.20.0
+evaluate>=0.4.0
+huggingface-hub>=0.16.0
+tokenizers>=0.13.0
+safetensors>=0.3.0
+
+# Audio Processing
+librosa>=0.10.0
+soundfile>=0.12.0
+
+# Evaluation Metrics
+jiwer>=3.0.0  # For WER calculation
+sacrebleu>=2.3.0
+
+# Data Processing
+numpy>=1.24.0
+pandas>=2.0.0
+
+# Progress and Logging
+tqdm>=4.65.0
+tensorboard>=2.13.0
+
+# Training Utilities
+scipy>=1.10.0
+
+# Optional but recommended for performance
+ninja  # For faster compilation
+packaging
+
+# JSON handling (already in Python stdlib, but explicit for clarity)
+# No additional package needed for json
+
+# Note: The 'evaluate' package provides the WER metric used in the scripts
+# If you get import errors, you may need:
+# pip install jiwer
+

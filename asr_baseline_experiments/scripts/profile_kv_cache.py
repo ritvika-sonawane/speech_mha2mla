@@ -12,13 +12,123 @@ import time
 import numpy as np
 from pathlib import Path
 import torchaudio
-from datasets import load_dataset
+from datasets import load_dataset, Dataset
 from jiwer import wer
+import soundfile as sf
+from tqdm import tqdm
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from models.conformer import build_conformer
 from models.branchformer import build_branchformer
 from models.attention_variants import calculate_kv_cache_size
+
+
+def load_librispeech_offline(data_dir, split='test-clean', max_samples=None):
+    """
+    Load LibriSpeech data from offline directory
+    
+    Args:
+        data_dir: Path to the base LibriSpeech directory
+        split: One of 'test-clean', 'test-other', 'dev-clean', 'dev-other'
+        max_samples: Maximum number of samples to load
+    
+    Returns:
+        HuggingFace Dataset object with audio and text
+    """
+    data_path = Path(data_dir) / split
+    
+    if not data_path.exists():
+        raise FileNotFoundError(f"Data directory not found: {data_path}")
+    
+    print(f"  Loading offline data from: {data_path}")
+    
+    # Collect all samples
+    samples = []
+    
+    # Iterate through speaker directories
+    for speaker_dir in sorted(data_path.iterdir()):
+        if not speaker_dir.is_dir():
+            continue
+        
+        # Iterate through chapter directories
+        for chapter_dir in sorted(speaker_dir.iterdir()):
+            if not chapter_dir.is_dir():
+                continue
+            
+            # Find transcript file
+            trans_file = chapter_dir / f"{speaker_dir.name}-{chapter_dir.name}.trans.txt"
+            
+            if not trans_file.exists():
+                continue
+            
+            # Read transcripts
+            with open(trans_file, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    
+                    parts = line.split(' ', 1)
+                    if len(parts) != 2:
+                        continue
+                    
+                    audio_id, text = parts
+                    audio_file = chapter_dir / f"{audio_id}.flac"
+                    
+                    if not audio_file.exists():
+                        continue
+                    
+                    samples.append({
+                        'audio_id': audio_id,
+                        'audio_path': str(audio_file),
+                        'text': text
+                    })
+                    
+                    if max_samples and len(samples) >= max_samples:
+                        break
+            
+            if max_samples and len(samples) >= max_samples:
+                break
+        
+        if max_samples and len(samples) >= max_samples:
+            break
+    
+    print(f"  Found {len(samples)} samples")
+    
+    # Load audio data
+    audio_data = []
+    texts = []
+    
+    print(f"  Loading audio files...")
+    for sample in tqdm(samples, desc="  Loading audio"):
+        try:
+            audio_array, sample_rate = sf.read(sample['audio_path'])
+            
+            # Ensure mono
+            if len(audio_array.shape) > 1:
+                audio_array = audio_array.mean(axis=1)
+            
+            # Convert to float32
+            if audio_array.dtype != np.float32:
+                audio_array = audio_array.astype(np.float32)
+            
+            audio_data.append({
+                'array': audio_array,
+                'sampling_rate': sample_rate,
+                'path': sample['audio_path']
+            })
+            texts.append(sample['text'])
+        except Exception as e:
+            print(f"  Error loading {sample['audio_path']}: {e}")
+            continue
+    
+    # Create HuggingFace dataset
+    dataset = Dataset.from_dict({
+        'audio': audio_data,
+        'text': texts
+    })
+    
+    return dataset
 
 
 def load_model(checkpoint_path, device):
@@ -83,11 +193,8 @@ def decode_predictions(logits, vocab):
     return texts
 
 
-def measure_kv_cache_size(model, config, device, num_samples=100):
+def measure_kv_cache_size(model, config, device, test_dataset, num_samples=100):
     """Measure actual KV cache size during inference"""
-    
-    # Load test dataset
-    test_dataset = load_dataset("librispeech_asr", "clean", split="test")
     
     cache_sizes = []
     inference_times = []
@@ -177,11 +284,8 @@ def measure_kv_cache_size(model, config, device, num_samples=100):
     return results
 
 
-def evaluate_wer(model, config, vocab, device, num_samples=500):
+def evaluate_wer(model, config, vocab, device, test_dataset, num_samples=500):
     """Evaluate Word Error Rate"""
-    
-    # Load test dataset
-    test_dataset = load_dataset("librispeech_asr", "clean", split="test")
     
     references = []
     hypotheses = []
@@ -233,12 +337,27 @@ def main(args):
     print(f"Attention: {config['attention_type']}")
     print(f"Parameters: {model.get_num_params():,}")
     
+    # Load dataset
+    print("\nLoading dataset...")
+    if args.use_hf_dataset:
+        print("  Using HuggingFace dataset loader...")
+        dataset_name = 'clean' if 'clean' in args.dataset else 'other'
+        dataset_split = 'test' if 'test' in args.dataset else 'validation'
+        test_dataset = load_dataset("librispeech_asr", dataset_name, split=dataset_split)
+    else:
+        print("  Using offline LibriSpeech data...")
+        # Load enough samples for both cache and WER evaluation
+        max_samples = max(args.num_cache_samples, args.num_wer_samples if args.eval_wer else 0)
+        test_dataset = load_librispeech_offline(args.offline_data_dir, args.dataset, max_samples=max_samples)
+    
+    print(f"  ✓ Loaded {len(test_dataset)} samples")
+    
     # Profile KV cache
     print("\n" + "="*60)
     print("Profiling KV Cache")
     print("="*60)
     
-    cache_results = measure_kv_cache_size(model, config, device, args.num_cache_samples)
+    cache_results = measure_kv_cache_size(model, config, device, test_dataset, args.num_cache_samples)
     
     print(f"\nKV Cache Results:")
     print(f"  Average Cache Size: {cache_results['avg_cache_size_kb']:.2f} KB")
@@ -253,7 +372,7 @@ def main(args):
         print("Evaluating Word Error Rate")
         print("="*60)
         
-        word_error_rate, refs, hyps = evaluate_wer(model, config, vocab, device, args.num_wer_samples)
+        word_error_rate, refs, hyps = evaluate_wer(model, config, vocab, device, test_dataset, args.num_wer_samples)
         
         print(f"\nWord Error Rate: {word_error_rate * 100:.2f}%")
         
@@ -281,6 +400,14 @@ if __name__ == "__main__":
     parser.add_argument('--num_cache_samples', type=int, default=100, help='Number of samples for cache profiling')
     parser.add_argument('--num_wer_samples', type=int, default=500, help='Number of samples for WER evaluation')
     parser.add_argument('--eval_wer', action='store_true', help='Evaluate WER')
+    parser.add_argument('--dataset', type=str, default='test-clean',
+                        choices=['test-clean', 'test-other', 'dev-clean', 'dev-other'],
+                        help='LibriSpeech test set to use')
+    parser.add_argument('--offline_data_dir', type=str, 
+                        default='/home/ubuntu/speech_mha2mla/asr_baseline_experiments/data/librispeech/LibriSpeech',
+                        help='Path to offline LibriSpeech data directory')
+    parser.add_argument('--use_hf_dataset', action='store_true',
+                        help='Use HuggingFace dataset instead of offline data')
     
     args = parser.parse_args()
     main(args)
