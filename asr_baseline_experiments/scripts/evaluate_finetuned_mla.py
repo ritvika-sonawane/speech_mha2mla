@@ -1,0 +1,325 @@
+#!/usr/bin/env python3
+"""
+Evaluate fine-tuned MLA model by reconstructing architecture
+
+This script properly loads the fine-tuned MLA model by:
+1. Loading the base HF model structure
+2. Replacing attention layers with MLA
+3. Loading the fine-tuned weights
+4. Evaluating on test set
+
+Usage:
+    python scripts/evaluate_finetuned_mla.py \
+        --model_dir results/conformer_mla_finetuned \
+        --output_file results/mla_finetuned_wer.json \
+        --dataset test-clean
+"""
+
+import argparse
+import torch
+import torch.nn as nn
+import json
+from pathlib import Path
+from datasets import load_dataset
+from transformers import Wav2Vec2ConformerForCTC, Wav2Vec2Processor
+from tqdm import tqdm
+import evaluate
+import time
+import numpy as np
+
+
+class MLAAttention(nn.Module):
+    """Multi-Latent Attention module"""
+    def __init__(self, d_model, num_heads, latent_dim, dropout=0.0):
+        super().__init__()
+        self.d_model = d_model
+        self.num_heads = num_heads
+        self.latent_dim = latent_dim
+        self.head_size = d_model // num_heads
+        
+        self.k_down = nn.Linear(d_model, latent_dim, bias=True)
+        self.k_up = nn.Linear(latent_dim, d_model, bias=False)
+        self.v_down = nn.Linear(d_model, latent_dim, bias=True)
+        self.v_up = nn.Linear(latent_dim, d_model, bias=False)
+        self.linear_q = nn.Linear(d_model, d_model, bias=True)
+        self.linear_out = nn.Linear(d_model, d_model, bias=True)
+        self.dropout = nn.Dropout(dropout)
+        
+        # Position embeddings (will be copied from original)
+        self.pos_bias_u = None
+        self.pos_bias_v = None
+        self.linear_pos = None
+        self.position_embeddings_type = None
+    
+    def forward(self, hidden_states, attention_mask=None, 
+                relative_position_embeddings=None, output_attentions=False):
+        batch_size, seq_length, _ = hidden_states.size()
+        
+        Q = self.linear_q(hidden_states)
+        Q = Q.view(batch_size, seq_length, self.num_heads, self.head_size).transpose(1, 2)
+        
+        K_latent = self.k_down(hidden_states)
+        K = self.k_up(K_latent)
+        K = K.view(batch_size, seq_length, self.num_heads, self.head_size).transpose(1, 2)
+        
+        V_latent = self.v_down(hidden_states)
+        V = self.v_up(V_latent)
+        V = V.view(batch_size, seq_length, self.num_heads, self.head_size).transpose(1, 2)
+        
+        scores = torch.matmul(Q, K.transpose(-2, -1)) / (self.head_size ** 0.5)
+        if attention_mask is not None:
+            scores = scores + attention_mask
+        
+        attn_weights = torch.softmax(scores, dim=-1)
+        attn_weights = self.dropout(attn_weights)
+        context = torch.matmul(attn_weights, V)
+        context = context.transpose(1, 2).contiguous().view(batch_size, seq_length, self.d_model)
+        output = self.linear_out(context)
+        
+        # Always return 2 values to match HF API: (hidden_states, attn_weights)
+        return (output, attn_weights if output_attentions else None)
+
+
+def load_finetuned_mla_model(model_dir, device='cuda'):
+    """
+    Load fine-tuned MLA model by reconstructing architecture
+    """
+    model_dir = Path(model_dir)
+    
+    print("Loading fine-tuned MLA model...")
+    
+    # Load metadata
+    metadata_path = model_dir / 'metadata.json'
+    if not metadata_path.exists():
+        raise FileNotFoundError(f"Metadata not found: {metadata_path}")
+    
+    with open(metadata_path) as f:
+        metadata = json.load(f)
+    
+    base_model_name = metadata.get('base_model', 'facebook/wav2vec2-conformer-rel-pos-large-960h-ft')
+    mla_config = metadata.get('mla_config', {})
+    latent_dim = mla_config.get('latent_dim', 512)
+    
+    print(f"  Base model: {base_model_name}")
+    print(f"  Latent dim: {latent_dim}")
+    
+    # Load base model structure
+    print("  Loading base model structure...")
+    model = Wav2Vec2ConformerForCTC.from_pretrained(base_model_name)
+    config = model.config
+    
+    # Replace all attention layers with MLA
+    print(f"  Replacing {config.num_hidden_layers} attention layers with MLA...")
+    for i, layer in enumerate(model.wav2vec2_conformer.encoder.layers):
+        old_attn = layer.self_attn
+        
+        # Create MLA attention
+        mla_attn = MLAAttention(
+            d_model=config.hidden_size,
+            num_heads=config.num_attention_heads,
+            latent_dim=latent_dim,
+            dropout=config.attention_dropout
+        )
+        
+        # Copy position embeddings
+        if hasattr(old_attn, 'pos_bias_u'):
+            mla_attn.pos_bias_u = old_attn.pos_bias_u
+        if hasattr(old_attn, 'pos_bias_v'):
+            mla_attn.pos_bias_v = old_attn.pos_bias_v
+        if hasattr(old_attn, 'linear_pos'):
+            mla_attn.linear_pos = old_attn.linear_pos
+        if hasattr(old_attn, 'position_embeddings_type'):
+            mla_attn.position_embeddings_type = old_attn.position_embeddings_type
+        
+        layer.self_attn = mla_attn
+    
+    # Load fine-tuned weights
+    weights_path = model_dir / 'pytorch_model.bin'
+    if not weights_path.exists():
+        raise FileNotFoundError(f"Weights not found: {weights_path}")
+    
+    print(f"  Loading fine-tuned weights from {weights_path.name}...")
+    state_dict = torch.load(weights_path, map_location='cpu')
+    
+    # Load state dict
+    missing_keys, unexpected_keys = model.load_state_dict(state_dict, strict=False)
+    
+    if missing_keys:
+        print(f"  ⚠ Missing keys: {len(missing_keys)}")
+    if unexpected_keys:
+        print(f"  ⚠ Unexpected keys: {len(unexpected_keys)}")
+    
+    model = model.to(device)
+    model.eval()
+    
+    print("  ✓ Model loaded successfully!")
+    print(f"  Parameters: {sum(p.numel() for p in model.parameters()):,}")
+    
+    return model
+
+
+def evaluate_model(model, processor, dataset, device='cuda', batch_size=8):
+    """Evaluate model and compute WER"""
+    predictions = []
+    references = []
+    inference_times = []
+    
+    print(f"\nEvaluating on {len(dataset)} examples...")
+    
+    with torch.no_grad():
+        for i in tqdm(range(0, len(dataset), batch_size)):
+            batch_indices = range(i, min(i+batch_size, len(dataset)))
+            batch = [dataset[idx] for idx in batch_indices]
+            
+            audios = [item['audio']['array'] for item in batch]
+            
+            inputs = processor(
+                audios,
+                sampling_rate=16000,
+                return_tensors="pt",
+                padding=True
+            )
+            
+            input_values = inputs.input_values.to(device)
+            attention_mask = inputs.attention_mask.to(device) if 'attention_mask' in inputs else None
+            
+            start_time = time.time()
+            
+            if attention_mask is not None:
+                logits = model(input_values, attention_mask=attention_mask).logits
+            else:
+                logits = model(input_values).logits
+            
+            inference_time = time.time() - start_time
+            inference_times.append(inference_time / len(audios))
+            
+            predicted_ids = torch.argmax(logits, dim=-1)
+            
+            for pred_ids in predicted_ids:
+                pred_str = processor.decode(pred_ids)
+                predictions.append(pred_str)
+            
+            for item in batch:
+                references.append(item['text'])
+    
+    # Calculate WER
+    wer_metric = evaluate.load("wer")
+    wer = wer_metric.compute(predictions=predictions, references=references)
+    
+    # Calculate per-character accuracy
+    total_chars = sum(len(ref) for ref in references)
+    matching_chars = sum(
+        sum(1 for p, r in zip(pred, ref) if p == r)
+        for pred, ref in zip(predictions, references)
+    )
+    char_accuracy = matching_chars / total_chars if total_chars > 0 else 0
+    
+    avg_inference_time = sum(inference_times) / len(inference_times)
+    
+    results = {
+        'wer': wer * 100,
+        'char_accuracy': char_accuracy * 100,
+        'num_samples': len(dataset),
+        'avg_inference_time_per_sample': avg_inference_time,
+        'total_inference_time': sum(inference_times),
+    }
+    
+    # Show examples
+    print("\n" + "="*70)
+    print("Sample Predictions:")
+    print("="*70)
+    for i in range(min(5, len(predictions))):
+        print(f"\nExample {i+1}:")
+        print(f"  Reference: {references[i]}")
+        print(f"  Predicted: {predictions[i]}")
+    
+    return results, predictions, references
+
+
+def main():
+    parser = argparse.ArgumentParser(description='Evaluate fine-tuned MLA model')
+    parser.add_argument('--model_dir', type=str, required=True,
+                        help='Directory containing fine-tuned MLA model')
+    parser.add_argument('--dataset', type=str, default='test-clean',
+                        choices=['test-clean', 'test-other', 'dev-clean', 'dev-other'],
+                        help='LibriSpeech test set')
+    parser.add_argument('--output_file', type=str, required=True,
+                        help='Output JSON file for results')
+    parser.add_argument('--batch_size', type=int, default=8)
+    parser.add_argument('--max_samples', type=int, default=None)
+    parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu')
+    
+    args = parser.parse_args()
+    
+    print("="*70)
+    print("Fine-tuned MLA Model Evaluation")
+    print("="*70)
+    print(f"\nModel directory: {args.model_dir}")
+    print(f"Dataset: {args.dataset}")
+    print(f"Device: {args.device}")
+    
+    # Load model
+    model = load_finetuned_mla_model(args.model_dir, args.device)
+    
+    # Load processor
+    print("\nLoading processor...")
+    processor = Wav2Vec2Processor.from_pretrained(args.model_dir)
+    
+    # Load dataset
+    print("\nLoading dataset...")
+    dataset_split = {
+        'test-clean': 'test',
+        'test-other': 'test.other',
+        'dev-clean': 'validation',
+        'dev-other': 'validation.other',
+    }[args.dataset]
+    
+    dataset_name = 'clean' if 'clean' in args.dataset else 'other'
+    dataset = load_dataset("librispeech_asr", dataset_name, split=dataset_split)
+    
+    if args.max_samples:
+        dataset = dataset.select(range(min(args.max_samples, len(dataset))))
+    
+    print(f"  ✓ Loaded {len(dataset)} samples")
+    
+    # Evaluate
+    results, predictions, references = evaluate_model(
+        model, processor, dataset, args.device, args.batch_size
+    )
+    
+    # Print results
+    print("\n" + "="*70)
+    print("EVALUATION RESULTS")
+    print("="*70)
+    print(f"Dataset: LibriSpeech {args.dataset}")
+    print(f"Number of samples: {results['num_samples']}")
+    print(f"\n✓ Word Error Rate (WER): {results['wer']:.2f}%")
+    print(f"✓ Character Accuracy: {results['char_accuracy']:.2f}%")
+    print(f"\nAvg inference time per sample: {results['avg_inference_time_per_sample']*1000:.2f}ms")
+    print(f"Total inference time: {results['total_inference_time']:.2f}s")
+    print("="*70)
+    
+    # Save results
+    output_path = Path(args.output_file)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    save_data = {
+        'model': args.model_dir,
+        'model_type': 'MLA (fine-tuned)',
+        'dataset': args.dataset,
+        'results': results,
+        'config': {
+            'batch_size': args.batch_size,
+            'device': args.device,
+        }
+    }
+    
+    with open(output_path, 'w') as f:
+        json.dump(save_data, f, indent=2)
+    
+    print(f"\n✓ Results saved to: {output_path}\n")
+
+
+if __name__ == '__main__':
+    main()
+

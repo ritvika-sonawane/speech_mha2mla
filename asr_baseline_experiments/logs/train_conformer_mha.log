@@ -1,33 +1,11 @@
 Using device: cuda
 Loading datasets...
 Building conformer model with mha attention...
-Model parameters: 580,428,832
+Model parameters: 9,166,624
 
 Epoch 1/50
-Epoch 1:   0%|          | 0/1784 [00:00<?, ?it/s]Epoch 1:   0%|          | 0/1784 [00:00<?, ?it/s]
-Traceback (most recent call last):
-  File "/home/ubuntu/speech_mha2mla/asr_baseline_experiments/scripts/train.py", line 321, in <module>
-    main(args)
-  File "/home/ubuntu/speech_mha2mla/asr_baseline_experiments/scripts/train.py", line 280, in main
-    train_loss = train_epoch(model, train_loader, criterion, optimizer, device, epoch)
-  File "/home/ubuntu/speech_mha2mla/asr_baseline_experiments/scripts/train.py", line 134, in train_epoch
-    features = extract_features(audios)
-  File "/home/ubuntu/speech_mha2mla/asr_baseline_experiments/scripts/train.py", line 118, in extract_features
-    features = mel_spec(audio)
-  File "/home/ubuntu/miniconda3/envs/speech/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1775, in _wrapped_call_impl
-    return self._call_impl(*args, **kwargs)
-  File "/home/ubuntu/miniconda3/envs/speech/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1786, in _call_impl
-    return forward_call(*args, **kwargs)
-  File "/home/ubuntu/miniconda3/envs/speech/lib/python3.10/site-packages/torchaudio/transforms/_transforms.py", line 620, in forward
-    specgram = self.spectrogram(waveform)
-  File "/home/ubuntu/miniconda3/envs/speech/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1775, in _wrapped_call_impl
-    return self._call_impl(*args, **kwargs)
-  File "/home/ubuntu/miniconda3/envs/speech/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1786, in _call_impl
-    return forward_call(*args, **kwargs)
-  File "/home/ubuntu/miniconda3/envs/speech/lib/python3.10/site-packages/torchaudio/transforms/_transforms.py", line 111, in forward
-    return F.spectrogram(
-  File "/home/ubuntu/miniconda3/envs/speech/lib/python3.10/site-packages/torchaudio/functional/functional.py", line 124, in spectrogram
-    spec_f = torch.stft(
-  File "/home/ubuntu/miniconda3/envs/speech/lib/python3.10/site-packages/torch/functional.py", line 681, in stft
-    return _VF.stft(  # type: ignore[attr-defined]
-RuntimeError: stft input and window must be on the same device but got self on cuda:0 and window on cpu
+Train Loss: 2.6343
+Val Loss: 3.8281
+Saved best model with val loss: 3.8281
+
+Epoch 2/50
